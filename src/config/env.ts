@@ -33,6 +33,11 @@ const envSchema = z.object({
   // ML Service
   ML_SERVICE_URL: z.string().default('http://localhost:5000'),
   USE_EXTERNAL_ML_SERVICE: z.string().transform(val => val === 'true').default('false'),
+  
+  // Roboflow API
+  ROBOFLOW_API_KEY: z.string().optional(),
+  ROBOFLOW_MODEL_ID: z.string().optional(),
+  ROBOFLOW_VERSION_NUMBER: z.string().default('1'),
 
   // Caching
   REDIS_URL: z.string().optional(),

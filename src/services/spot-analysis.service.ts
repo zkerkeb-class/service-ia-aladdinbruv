@@ -1,6 +1,7 @@
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
+import FormData from 'form-data';
 import logger from '../config/logger';
 import { env } from '../config/env';
 import { 
@@ -18,36 +19,288 @@ import {
  */
 export class SpotAnalysisService {
   private mlServiceUrl: string;
+  private roboflowApiKey: string | undefined;
+  private roboflowModelId: string | undefined;
+  private roboflowVersionNumber: string;
 
   constructor() {
     this.mlServiceUrl = env.ML_SERVICE_URL;
+    this.roboflowApiKey = env.ROBOFLOW_API_KEY;
+    this.roboflowModelId = env.ROBOFLOW_MODEL_ID;
+    this.roboflowVersionNumber = env.ROBOFLOW_VERSION_NUMBER;
+    
+    // Log Roboflow configuration
+    logger.info(`Roboflow configuration - API Key: ${this.roboflowApiKey ? 'Set' : 'Not set'}, Model ID: ${this.roboflowModelId ? 'Set' : 'Not set'}, Version: ${this.roboflowVersionNumber}`);
   }
 
   /**
    * Analyze a skateboarding spot from an image
    * @param imagePath Path to the image file
+   * @param userId The ID of the user who uploaded the spot
+   * @param userEmail The email of the user for notifications
    * @returns Analysis result with spot type, features, surface, and difficulty
    */
-  async analyzeSpotImage(imagePath: string): Promise<AnalysisResult> {
+  async analyzeSpotImage(imagePath: string, userId: string, userEmail: string): Promise<AnalysisResult> {
+    let analysisResult: AnalysisResult | null = null;
     try {
-      logger.info(`Analyzing spot image: ${imagePath}`);
+      logger.info(`Analyzing spot image: ${imagePath} for user: ${userId}`);
       
-      // Read the image file
+      // Add more detailed logging
+      logger.info(`Roboflow availability check - API Key: ${this.roboflowApiKey ? 'Available' : 'Missing'}, Model ID: ${this.roboflowModelId ? 'Available' : 'Missing'}`);
+      
+      // Try to analyze with Roboflow first
+      if (this.roboflowApiKey && this.roboflowModelId) {
+        try {
+          logger.info('Attempting to analyze with Roboflow');
+          const roboflowResult = await this.analyzeWithRoboflow(imagePath);
+          logger.info('Successfully analyzed with Roboflow');
+          analysisResult = roboflowResult;
+          return analysisResult;
+        } catch (roboflowError) {
+          logger.error('Error analyzing with Roboflow, falling back to external service:', roboflowError);
+        }
+      } else {
+        logger.warn('Skipping Roboflow analysis - missing API key or model ID');
+      }
+      
+      // Fallback to original external service if Roboflow fails
+      logger.info('Falling back to mock implementation');
       const imageBuffer = fs.readFileSync(imagePath);
-      
-      // Analyze with external service
-      return await this.analyzeWithExternalService(imageBuffer);
+      analysisResult = await this.analyzeWithExternalService(imageBuffer);
+      return analysisResult;
     } catch (error) {
       logger.error('Error analyzing spot image:', error);
       
       // Return a default response when analysis fails
-      return {
+      analysisResult = {
         type: 'unknown',
         confidence: 0,
         features: {},
         surfaceQuality: 'unknown',
         difficulty: 'medium'
       };
+      return analysisResult;
+    } finally {
+      // --- BEGIN: ADDED NOTIFICATION LOGIC ---
+      if (analysisResult) {
+        try {
+          // Use dynamic import for node-fetch in a CJS module
+          const fetch = (await import('node-fetch')).default;
+
+          // Fire-and-forget the notification
+          fetch('http://localhost:3004/api/notifications/email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              to: userEmail,
+              subject: 'Your SK8 Spot Analysis is Complete!',
+              html: `<h1>Analysis Complete</h1><p>Hey there, your spot analysis is ready. We found a <strong>${analysisResult.type}</strong> with an estimated difficulty of <strong>${analysisResult.difficulty}</strong>. Open the app to see the full details!</p>`
+            }),
+          }).catch(err => {
+            // Log the error but don't block the main flow
+            console.error(`Failed to send analysis completion email to ${userEmail}:`, err);
+          });
+        } catch (emailError) {
+          console.error('Error initiating the analysis-complete email process:', emailError);
+        }
+      }
+      // --- END: ADDED NOTIFICATION LOGIC ---
+    }
+  }
+
+  /**
+   * Analyze image using Roboflow API
+   * @param imagePath Path to the image file
+   * @returns Analysis result
+   */
+  private async analyzeWithRoboflow(imagePath: string): Promise<AnalysisResult> {
+    try {
+      logger.info(`Analyzing with Roboflow: ${imagePath}`);
+      
+      if (!this.roboflowApiKey || !this.roboflowModelId) {
+        throw new Error('Roboflow API key or Model ID not configured');
+      }
+      
+      // Read the image file as buffer
+      const imageBuffer = fs.readFileSync(imagePath);
+      
+      // Convert to base64 for the API
+      const base64Image = imageBuffer.toString('base64');
+      
+      // Construct URL with API key - Roboflow uses a specific format for their API
+      const apiUrl = `https://detect.roboflow.com/${this.roboflowModelId}/${this.roboflowVersionNumber}`;
+      logger.info(`Calling Roboflow API URL: ${apiUrl}`);
+      
+      // Make the request to Roboflow API - using the proper format according to docs
+      const response = await axios({
+        method: 'POST',
+        url: apiUrl,
+        params: {
+          api_key: this.roboflowApiKey
+        },
+        data: {
+          image: base64Image
+        },
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      // Log the response for debugging
+      logger.info(`Roboflow API response: ${JSON.stringify(response.data)}`);
+      
+      // Process Roboflow response
+      const predictions = response.data.predictions || [];
+      return this.processRoboflowPredictions(predictions, imagePath);
+    } catch (error) {
+      logger.error('Error analyzing with Roboflow:', error);
+      throw error; // Let the caller handle the fallback
+    }
+  }
+  
+  /**
+   * Process predictions from Roboflow into our AnalysisResult format
+   */
+  private processRoboflowPredictions(predictions: any[], imagePath: string): AnalysisResult {
+    // Group predictions by class
+    const classes: Record<string, number> = {};
+    const confidences: Record<string, number[]> = {};
+    
+    predictions.forEach(pred => {
+      const className = pred.class;
+      classes[className] = (classes[className] || 0) + 1;
+      
+      if (!confidences[className]) {
+        confidences[className] = [];
+      }
+      confidences[className].push(pred.confidence);
+    });
+    
+    // Determine dominant spot type
+    let spotType = 'unknown' as SpotType;
+    let maxCount = 0;
+    
+    for (const [className, count] of Object.entries(classes)) {
+      if (count > maxCount) {
+        maxCount = count;
+        // Map the detected class to one of our SpotType values
+        spotType = this.mapToSpotType(className);
+      }
+    }
+    
+    // Calculate average confidence
+    let avgConfidence = 0.7; // Default
+    if (predictions.length > 0) {
+      const totalConf = predictions.reduce((sum, pred) => sum + pred.confidence, 0);
+      avgConfidence = totalConf / predictions.length;
+    }
+    
+    // Map difficulty based on detected features
+    let difficulty: DifficultyRating = 'medium';
+    if (spotType === 'rail' || spotType === 'stairs' || classes['gap'] > 0) {
+      difficulty = 'hard';
+    } else if (spotType === 'ledge' || classes['manual_pad'] > 0) {
+      difficulty = 'medium';
+    } else if (spotType === 'other' && classes['flatground'] > 0) {
+      difficulty = 'easy';
+    }
+    
+    // Calculate skateability score (scale 1-10)
+    const skateabilityScore = Math.min(Math.round(avgConfidence * 10 * 10) / 10, 10);
+    
+    // Get dimension estimates from bounding boxes if possible
+    const features: SpotFeatures = {};
+    if (predictions.length > 0 && spotType !== 'unknown') {
+      // Find the largest prediction of the dominant type
+      const typeObjects = predictions.filter(p => this.mapToSpotType(p.class) === spotType);
+      if (typeObjects.length > 0) {
+        const largestObject = typeObjects.reduce((largest, current) => {
+          const currentArea = (current.width * current.height) || 0;
+          const largestArea = (largest.width * largest.height) || 0;
+          return currentArea > largestArea ? current : largest;
+        }, typeObjects[0]);
+        
+        // Add basic dimensions (estimated)
+        features.width = Math.round(largestObject.width * 100); // convert to cm (rough estimate)
+        features.height = Math.round(largestObject.height * 80); // convert to cm (rough estimate)
+        features.length = Math.round(largestObject.width * 150); // convert to cm (rough estimate)
+      }
+    }
+    
+    // Get suggested tricks based on spot type
+    const suggestedTricks = this.getSuggestedTricksForType(spotType);
+    
+    // Map surface quality
+    const surfaceQuality = this.estimateSurfaceQuality(imagePath) as SurfaceType;
+    
+    return {
+      type: spotType,
+      confidence: avgConfidence,
+      features,
+      surfaceQuality,
+      difficulty,
+      skateabilityScore,
+      suggestedTricks
+    };
+  }
+  
+  /**
+   * Map detected class name to SpotType
+   */
+  private mapToSpotType(className: string): SpotType {
+    const lowerClass = className.toLowerCase();
+    
+    if (lowerClass.includes('rail')) return 'rail';
+    if (lowerClass.includes('ledge')) return 'ledge';
+    if (lowerClass.includes('stair')) return 'stairs';
+    if (lowerClass.includes('gap')) return 'gap';
+    if (lowerClass.includes('manual') || lowerClass.includes('pad')) return 'manual pad';
+    if (lowerClass.includes('bowl')) return 'bowl';
+    if (lowerClass.includes('ramp')) return 'ramp';
+    if (lowerClass.includes('half') && lowerClass.includes('pipe')) return 'halfpipe';
+    if (lowerClass.includes('plaza')) return 'plaza';
+    if (lowerClass.includes('flat')) return 'other';
+    
+    // Default to 'other' if we can't map it directly
+    return 'other';
+  }
+  
+  /**
+   * Estimate surface quality (simplified implementation)
+   * In a production app, you might want a dedicated model for surface analysis
+   */
+  private estimateSurfaceQuality(imagePath: string): string {
+    // This would ideally use computer vision to analyze the texture
+    // For now, we'll return a placeholder
+    return 'smooth';
+  }
+  
+  /**
+   * Get suggested tricks based on spot type
+   */
+  private getSuggestedTricksForType(spotType: SpotType): string[] {
+    switch(spotType) {
+      case 'rail':
+        return ['50-50 Grind', 'Boardslide', 'Lipslide', 'Smith Grind', 'Feeble Grind'];
+      case 'ledge':
+        return ['50-50 Grind', 'Noseslide', 'Tailslide', 'Crooked Grind', 'Bluntslide'];
+      case 'stairs':
+        return ['Ollie', 'Kickflip', 'Heelflip', '360 Flip', 'Hardflip'];
+      case 'ramp':
+      case 'halfpipe':
+        return ['Rock to Fakie', 'Axle Stall', 'Disaster', 'Blunt to Fakie', 'Rock and Roll'];
+      case 'manual pad':
+        return ['Manual', 'Nose Manual', 'Kickflip to Manual', 'Manual to 180 Out'];
+      case 'gap':
+        return ['Ollie', 'Kickflip', 'Heelflip', '360 Flip', 'Varial Heel'];
+      case 'plaza':
+        return ['Lines', 'Flip Tricks', 'Grinds', 'Manual Combos', 'Gaps'];
+      case 'bowl':
+        return ['Carve', 'Grind', 'Air', 'Disaster', 'Stall'];
+      case 'other':
+        return ['Kickflip', 'Heelflip', '360 Flip', 'Impossible', 'Varial Flip']; 
+      default:
+        return ['Ollie', 'Manual', 'Kickflip', 'Heelflip', 'Pop Shove-it'];
     }
   }
 
@@ -282,33 +535,34 @@ export class SpotAnalysisService {
   }
 
   /**
-   * Analyze image with external ML service
-   * @param imageBuffer Image buffer
-   * @returns Analysis result
+   * Analyze using our external ML service
+   * This is a fallback when Roboflow isn't configured or fails
    */
   private async analyzeWithExternalService(imageBuffer: Buffer): Promise<AnalysisResult> {
     try {
-      // Create form data for the image
-      const formData = new FormData();
-      const blob = new Blob([imageBuffer], { type: 'image/jpeg' });
-      formData.append('image', blob, 'image.jpg');
+      // Currently, we don't have a working external service, so we'll use a mock implementation
+      return this.getMockAnalysisResult();
       
-      // Send to external ML service
-      const response = await axios.post(`${this.mlServiceUrl}/analyze`, formData, {
+      // Below is the implementation that would work with a real service
+      /*
+      // Using the Buffer directly instead of a stream to avoid the source.on error
+      const formData = new FormData();
+      formData.append('image', imageBuffer, {
+        filename: 'spot_image.jpg',
+        contentType: 'image/jpeg'
+      });
+
+      const response = await axios.post(this.mlServiceUrl, formData, {
         headers: {
-          'Content-Type': 'multipart/form-data',
+          ...formData.getHeaders(),
         },
       });
-      
-      if (response.status === 200 && response.data) {
-        return response.data;
-      }
-      
-      throw new Error('Invalid response from ML service');
+
+      return response.data;
+      */
     } catch (error) {
       logger.error('Error calling external ML service:', error);
-      
-      // Return mock data if external service fails
+      // Return mock data if the service fails
       return this.getMockAnalysisResult();
     }
   }

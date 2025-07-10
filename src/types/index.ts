@@ -11,6 +11,8 @@ export interface SpotFeatures {
   length?: number;
   angle?: number;
   steps?: number;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
   [key: string]: any;
 }
 
@@ -120,6 +122,8 @@ export interface AnalysisResult {
   surfaceQuality?: string;
   difficulty?: DifficultyRating;
   confidence: number;
+  skateabilityScore?: number;
+  suggestedTricks?: string[];
 }
 
 export interface PaginationOptions {
@@ -162,4 +166,6 @@ export type ErrorResponse = {
   error?: string;
   timestamp: string;
   path: string;
-}; 
+};
+
+export type SpotStatus = 'active' | 'pending' | 'rejected' | 'archived'; 

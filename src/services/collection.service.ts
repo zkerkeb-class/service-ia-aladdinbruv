@@ -473,6 +473,39 @@ export class CollectionService {
       throw error;
     }
   }
+
+  async getSpotsInCollection(collectionId: string): Promise<any[]> {
+    // Implementation for getting spots in a collection
+    return [];
+  }
+
+  async getCollectionsByUser(userId: string): Promise<any[]> {
+    const { data, error } = await supabase
+      .from('collections')
+      .select('*')
+      .eq('user_id', userId);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    return data;
+  }
+
+  async getAchievementsByUser(userId: string): Promise<any[]> {
+    const { data, error } = await supabase
+      .from('user_achievements')
+      .select(`
+        achievements (*)
+      `)
+      .eq('user_id', userId);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    return data.map((ua: any) => ua.achievements);
+  }
 }
 
 // Export singleton instance

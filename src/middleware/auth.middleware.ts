@@ -25,7 +25,10 @@ export const authenticate = async (
   try {
     const authHeader = req.headers.authorization;
     
+    console.log('🔍 Auth middleware - Authorization header:', authHeader ? 'Present' : 'Missing');
+    
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.log('❌ Auth middleware - No Bearer token found');
       return res.status(StatusCodes.UNAUTHORIZED).json({
         status: 'fail',
         message: 'Authentication required'
@@ -33,18 +36,66 @@ export const authenticate = async (
     }
 
     const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, env.JWT_SECRET) as {
-      userId: string;
-      email: string;
-      role: string;
-    };
+    console.log('🔍 Auth middleware - Token (first 50 chars):', token.substring(0, 50) + '...');
+    console.log('🔍 Auth middleware - JWT_SECRET (first 10 chars):', env.JWT_SECRET.substring(0, 10) + '...');
     
-    req.user = decoded;
-    next();
+    // Development mock token bypass
+    if (token === 'mock-development-token' && env.NODE_ENV === 'development') {
+      console.log('🔍 Auth middleware - Using mock development token');
+      req.user = {
+        userId: 'test-user-123',
+        email: 'test@example.com',
+        role: 'user',
+      };
+      return next();
+    }
+    
+    try {
+      const decoded = jwt.verify(token, env.JWT_SECRET) as {
+        sub?: string;        // JWT standard field for user ID
+        userId?: string;     // Legacy field name
+        email: string;
+        role: string;
+      };
+      
+      console.log('🔍 Auth middleware - Decoded token:', {
+        sub: decoded.sub,
+        userId: decoded.userId,
+        email: decoded.email,
+        role: decoded.role
+      });
+      
+      // Use 'sub' field if available (JWT standard), otherwise fall back to 'userId'
+      const userId = decoded.sub || decoded.userId;
+      
+      if (!userId) {
+        console.log('❌ Auth middleware - No userId or sub field found');
+        return res.status(StatusCodes.UNAUTHORIZED).json({
+          status: 'fail',
+          message: 'Invalid token format'
+        });
+      }
+      
+      req.user = {
+        userId,
+        email: decoded.email,
+        role: decoded.role,
+      };
+      
+      console.log('✅ Auth middleware - Authentication successful for user:', userId);
+      next();
+    } catch (jwtError: any) {
+      console.error('❌ Auth middleware - JWT verification failed:', jwtError?.message || jwtError);
+      return res.status(StatusCodes.UNAUTHORIZED).json({
+        status: 'fail',
+        message: 'Invalid or expired token'
+      });
+    }
   } catch (error) {
+    console.error('❌ Auth middleware - Unexpected error:', error);
     return res.status(StatusCodes.UNAUTHORIZED).json({
       status: 'fail',
-      message: 'Invalid or expired token'
+      message: 'Authentication error'
     });
   }
 };
@@ -94,7 +145,8 @@ export const authorize = (roles: string[]) => {
 export const blacklistToken = async (token: string): Promise<void> => {
   try {
     const decoded = jwt.decode(token) as {
-      userId: string;
+      sub?: string;
+      userId?: string;
       email: string;
       role: string;
       exp?: number;

@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
-import { supabase } from '../config/supabase';
-import { cacheManager } from '../config/cache';
+import { supabase, supabaseAdmin } from './supabase.service';
+import { getCache, setCache, deleteCache, clearCachePattern } from '../config/cache';
 import logger from '../config/logger';
 import { 
   Spot, 
@@ -8,8 +8,8 @@ import {
   SurfaceType, 
   SpotFeatures, 
   GeoLocation,
-  DifficultyRating,
-  PaginatedResult,
+  DifficultyRating, 
+  PaginationResult, 
   SpotStatus
 } from '../types';
 
@@ -18,46 +18,62 @@ import {
  */
 export class SpotStorageService {
   private cacheTTL = 60 * 60; // 1 hour in seconds
+
+  /**
+   * Get the admin client for database operations that need to bypass RLS
+   * @returns Supabase admin client
+   */
+  private getAdminClient() {
+    try {
+      return supabaseAdmin;
+    } catch (error) {
+      logger.warn('Admin client not available, falling back to regular client:', error);
+      return supabase;
+    }
+  }
   
   /**
    * Create a new spot in the database
    * @param spot Spot data to create
    * @returns Created spot with ID
    */
-  async createSpot(spot: Omit<Spot, 'id' | 'created_at' | 'updated_at'>): Promise<Spot> {
+  async createSpot(spot: any): Promise<Spot> {
     try {
       const id = uuidv4();
       const timestamp = new Date().toISOString();
       
-      // Prepare spot object with defaults
-      const newSpot: Spot = {
-        id,
-        ...spot,
-        created_at: timestamp,
-        updated_at: timestamp,
-        status: spot.status || 'active' as SpotStatus,
-        verified: spot.verified || false,
-        skateability_score: spot.skateability_score || 5
-      };
-      
-      // Convert GeoLocation to PostGIS format if present
-      let geoData = {};
-      if (spot.location) {
-        geoData = {
-          location: `POINT(${spot.location.longitude} ${spot.location.latitude})`,
-          latitude: spot.location.latitude,
-          longitude: spot.location.longitude
-        };
+      // Handle both nested location object and flat latitude/longitude
+      let latitude: number, longitude: number;
+      if (spot.location && typeof spot.location === 'object') {
+        latitude = spot.location.latitude;
+        longitude = spot.location.longitude;
+      } else if (spot.latitude && spot.longitude) {
+        latitude = spot.latitude;
+        longitude = spot.longitude;
+      } else {
+        throw new Error('Missing location data: latitude and longitude are required');
       }
       
-      // Insert into database
+      // Extract images from spot data since they're stored in a separate table
+      const { images, ...spotDataWithoutImages } = spot;
+      
+      const newSpotData = {
+        ...spotDataWithoutImages,
+        id,
+        created_at: timestamp,
+        updated_at: timestamp,
+        status: spot.status || 'active',
+        verified: spot.verified || false,
+        skateability_score: spot.skateability_score || 5,
+        location: `POINT(${longitude} ${latitude})`,
+        latitude: latitude,
+        longitude: longitude,
+        features: spot.features || {}
+      };
+
       const { data, error } = await supabase
         .from('spots')
-        .insert([{
-          ...newSpot,
-          ...geoData,
-          features: spot.features || {}
-        }])
+        .insert([newSpotData])
         .select()
         .single();
       
@@ -66,13 +82,37 @@ export class SpotStorageService {
         throw new Error(`Database error: ${error.message}`);
       }
       
-      // Invalidate cache for spots
+      // Handle images if provided
+      if (images && Array.isArray(images) && images.length > 0) {
+        const imagePromises = images.map((imageUrl: string, index: number) => {
+          return supabase
+            .from('spot_images')
+            .insert({
+              id: uuidv4(),
+              spot_id: id,
+              user_id: spot.user_id,
+              image_url: imageUrl,
+              is_primary: index === 0, // First image is primary
+              angle: 'main',
+              created_at: timestamp
+            });
+        });
+        
+        try {
+          await Promise.all(imagePromises);
+        } catch (imageError) {
+          logger.warn('Some images failed to save:', imageError);
+          // Don't fail the entire spot creation if images fail
+        }
+      }
+      
       await this.invalidateSpotCaches();
       
       return this.formatSpotData(data);
     } catch (error) {
       logger.error('Error creating spot:', error);
-      throw new Error('Failed to create spot');
+      if (error instanceof Error) throw new Error(`Failed to create spot: ${error.message}`);
+      throw new Error('Failed to create spot due to an unknown error.');
     }
   }
   
@@ -125,14 +165,14 @@ export class SpotStorageService {
         throw new Error(`Database error: ${error.message}`);
       }
       
-      // Invalidate caches
-      await cacheManager.del(`spot:${id}`);
+      await deleteCache(`spot:${id}`);
       await this.invalidateSpotCaches();
       
       return this.formatSpotData(data);
     } catch (error) {
       logger.error('Error updating spot:', error);
-      throw new Error(`Failed to update spot: ${error.message}`);
+      if (error instanceof Error) throw new Error(`Failed to update spot: ${error.message}`);
+      throw new Error('Failed to update spot');
     }
   }
   
@@ -160,14 +200,14 @@ export class SpotStorageService {
         throw new Error(`Database error: ${error.message}`);
       }
       
-      // Invalidate caches
-      await cacheManager.del(`spot:${id}`);
+      await deleteCache(`spot:${id}`);
       await this.invalidateSpotCaches();
       
       return true;
     } catch (error) {
       logger.error('Error deleting spot:', error);
-      throw new Error(`Failed to delete spot: ${error.message}`);
+      if (error instanceof Error) throw new Error(`Failed to delete spot: ${error.message}`);
+      throw new Error('Failed to delete spot');
     }
   }
   
@@ -178,14 +218,13 @@ export class SpotStorageService {
    */
   async getSpotById(id: string): Promise<Spot | null> {
     try {
-      // Check cache first
-      const cachedSpot = await cacheManager.get<Spot>(`spot:${id}`);
+      const cachedSpot = await getCache<Spot>(`spot:${id}`);
       if (cachedSpot) {
         return cachedSpot;
       }
       
       // Fetch from database
-      const { data, error } = await supabase
+      const { data, error } = await this.getAdminClient()
         .from('spots')
         .select('*')
         .eq('id', id)
@@ -206,13 +245,13 @@ export class SpotStorageService {
       
       const formatted = this.formatSpotData(data);
       
-      // Cache result
-      await cacheManager.set(`spot:${id}`, formatted, this.cacheTTL);
+      await setCache(`spot:${id}`, formatted, this.cacheTTL);
       
       return formatted;
     } catch (error) {
       logger.error('Error getting spot by ID:', error);
-      throw new Error(`Failed to get spot: ${error.message}`);
+      if (error instanceof Error) throw new Error(`Failed to get spot: ${error.message}`);
+      throw new Error('Failed to get spot');
     }
   }
   
@@ -236,7 +275,7 @@ export class SpotStorageService {
     minSkateabilityScore?: number;
     sortBy?: string;
     sortOrder?: 'asc' | 'desc';
-  } = {}): Promise<PaginatedResult<Spot>> {
+  } = {}): Promise<PaginationResult<Spot>> {
     try {
       const {
         page = 1,
@@ -255,105 +294,65 @@ export class SpotStorageService {
         sortOrder = 'desc',
       } = options;
       
-      // Calculate offset
-      const offset = (page - 1) * limit;
+      const cacheKey = `spots:${JSON.stringify(options)}`;
+      const cachedSpots = await getCache<PaginationResult<Spot>>(cacheKey);
+      if (cachedSpots) return cachedSpots;
+
+      let query;
       
-      // Cache key based on query parameters
-      const cacheKey = `spots:${JSON.stringify({
-        page, limit, type, surface, difficulty, verified,
-        userId, search, status, nearLocation, radius,
-        minSkateabilityScore, sortBy, sortOrder
-      })}`;
-      
-      // Check cache first
-      const cachedResult = await cacheManager.get<PaginatedResult<Spot>>(cacheKey);
-      if (cachedResult) {
-        return cachedResult;
-      }
-      
-      // Start building query
-      let query = supabase
-        .from('spots')
-        .select('*', { count: 'exact' });
-      
-      // Apply filters
-      if (type) {
-        query = query.eq('type', type);
-      }
-      
-      if (surface) {
-        query = query.eq('surface', surface);
-      }
-      
-      if (difficulty) {
-        query = query.eq('difficulty', difficulty);
-      }
-      
-      if (verified !== undefined) {
-        query = query.eq('verified', verified);
-      }
-      
-      if (userId) {
-        query = query.eq('created_by', userId);
-      }
-      
-      if (status) {
-        query = query.eq('status', status);
-      }
-      
-      if (minSkateabilityScore !== undefined) {
-        query = query.gte('skateability_score', minSkateabilityScore);
-      }
-      
-      if (search) {
-        query = query.or(`name.ilike.%${search}%,description.ilike.%${search}%`);
-      }
-      
-      // Add geospatial query if location is provided
-      if (nearLocation && nearLocation.latitude && nearLocation.longitude) {
-        // Use PostGIS to find spots within radius kilometers
-        query = query.rpc('spots_within_radius', {
+      if (nearLocation) {
+        query = this.getAdminClient().rpc('find_spots_near', {
           lat: nearLocation.latitude,
-          lng: nearLocation.longitude,
+          lon: nearLocation.longitude,
           radius_km: radius
         });
+      } else {
+        query = this.getAdminClient().from('spots').select('*', { count: 'exact' });
       }
-      
-      // Apply sorting
-      query = query.order(sortBy, { ascending: sortOrder === 'asc' });
-      
-      // Apply pagination
-      query = query.range(offset, offset + limit - 1);
-      
-      // Execute query
-      const { data, error, count } = await query;
-      
+
+      if (type) query = query.eq('type', type);
+      if (surface) query = query.eq('surface', surface);
+      if (difficulty) query = query.eq('difficulty', difficulty);
+      if (verified) query = query.eq('verified', verified);
+      if (status) query = query.eq('status', status);
+      if (minSkateabilityScore) query = query.gte('skateability_score', minSkateabilityScore);
+      if (userId) query = query.eq('user_id', userId);
+
+      // Search functionality
+      if (search) {
+        query = query.textSearch('name', search, { type: 'websearch', config: 'english' });
+      }
+
+      if (sortBy) {
+        query = query.order(sortBy, { ascending: sortOrder === 'asc' });
+      }
+
+      const { data, error, count } = await query
+        .range((page - 1) * limit, page * limit - 1);
+
       if (error) {
         logger.error('Error getting spots:', error);
         throw new Error(`Database error: ${error.message}`);
       }
-      
-      // Format data
-      const spots = data.map(spot => this.formatSpotData(spot));
-      
-      // Prepare result
-      const result: PaginatedResult<Spot> = {
+
+      const spots = data.map((spot: any) => this.formatSpotData(spot));
+      const total = count || 0;
+
+      const result: PaginationResult<Spot> = {
         data: spots,
-        pagination: {
-          total: count || 0,
-          page,
-          limit,
-          pages: count ? Math.ceil(count / limit) : 0
-        }
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
       };
-      
-      // Cache result
-      await cacheManager.set(cacheKey, result, this.cacheTTL);
-      
+
+      await setCache(cacheKey, result, this.cacheTTL);
+
       return result;
     } catch (error) {
       logger.error('Error getting spots:', error);
-      throw new Error(`Failed to get spots: ${error.message}`);
+      if (error instanceof Error) throw new Error(`Failed to get spots: ${error.message}`);
+      throw new Error('Failed to get spots');
     }
   }
   
@@ -371,28 +370,13 @@ export class SpotStorageService {
       nearLocation?: GeoLocation;
       radius?: number;
     } = {}
-  ): Promise<PaginatedResult<Spot>> {
+  ): Promise<PaginationResult<Spot>> {
     try {
-      const {
-        page = 1,
-        limit = 20,
-        nearLocation,
-        radius = 10
-      } = options;
-      
-      return this.getSpots({
-        page,
-        limit,
-        search: query,
-        nearLocation,
-        radius,
-        status: 'active',
-        sortBy: 'skateability_score',
-        sortOrder: 'desc'
-      });
+      return this.getSpots({ search: query, ...options });
     } catch (error) {
       logger.error('Error searching spots:', error);
-      throw new Error(`Failed to search spots: ${error.message}`);
+      if (error instanceof Error) throw new Error(`Failed to search spots: ${error.message}`);
+      throw new Error('Failed to search spots');
     }
   }
   
@@ -411,22 +395,13 @@ export class SpotStorageService {
       limit?: number;
       type?: SpotType;
     } = {}
-  ): Promise<PaginatedResult<Spot>> {
+  ): Promise<PaginationResult<Spot>> {
     try {
-      const { page = 1, limit = 20, type } = options;
-      
-      return this.getSpots({
-        page,
-        limit,
-        nearLocation: location,
-        radius,
-        type,
-        status: 'active',
-        sortBy: 'distance' // Assumes the RPC returns distance
-      });
+      return this.getSpots({ nearLocation: location, radius, ...options });
     } catch (error) {
       logger.error('Error finding nearby spots:', error);
-      throw new Error(`Failed to find nearby spots: ${error.message}`);
+      if (error instanceof Error) throw new Error(`Failed to find nearby spots: ${error.message}`);
+      throw new Error('Failed to find nearby spots');
     }
   }
   
@@ -446,7 +421,8 @@ export class SpotStorageService {
       return this.updateSpot(id, { skateability_score: score });
     } catch (error) {
       logger.error('Error updating skateability score:', error);
-      throw new Error(`Failed to update skateability score: ${error.message}`);
+      if (error instanceof Error) throw new Error(`Failed to update skateability score: ${error.message}`);
+      throw new Error('Failed to update skateability score');
     }
   }
   
@@ -463,21 +439,13 @@ export class SpotStorageService {
       limit?: number;
       status?: SpotStatus;
     } = {}
-  ): Promise<PaginatedResult<Spot>> {
+  ): Promise<PaginationResult<Spot>> {
     try {
-      const { page = 1, limit = 20, status } = options;
-      
-      return this.getSpots({
-        page,
-        limit,
-        userId,
-        status,
-        sortBy: 'created_at',
-        sortOrder: 'desc'
-      });
+      return this.getSpots({ userId, ...options });
     } catch (error) {
       logger.error('Error getting user spots:', error);
-      throw new Error(`Failed to get user spots: ${error.message}`);
+      if (error instanceof Error) throw new Error(`Failed to get user spots: ${error.message}`);
+      throw new Error('Failed to get user spots');
     }
   }
   
@@ -491,7 +459,8 @@ export class SpotStorageService {
       return this.updateSpot(id, { verified: true });
     } catch (error) {
       logger.error('Error verifying spot:', error);
-      throw new Error(`Failed to verify spot: ${error.message}`);
+      if (error instanceof Error) throw new Error(`Failed to verify spot: ${error.message}`);
+      throw new Error('Failed to verify spot');
     }
   }
   
@@ -506,7 +475,8 @@ export class SpotStorageService {
       return this.updateSpot(id, { status });
     } catch (error) {
       logger.error('Error changing spot status:', error);
-      throw new Error(`Failed to change spot status: ${error.message}`);
+      if (error instanceof Error) throw new Error(`Failed to change spot status: ${error.message}`);
+      throw new Error('Failed to change spot status');
     }
   }
   
@@ -517,39 +487,19 @@ export class SpotStorageService {
    * @private
    */
   private formatSpotData(data: any): Spot {
-    // Extract location data
-    let location: GeoLocation | undefined;
-    if (data.latitude !== null && data.longitude !== null) {
-      location = {
-        latitude: data.latitude,
-        longitude: data.longitude
-      };
+    const { latitude, longitude, ...rest } = data;
+    if (!latitude || !longitude) {
+      throw new Error(`Spot with id ${data.id} has no location data.`);
     }
-    
-    // Format features
-    const features: SpotFeatures = data.features || {};
-    
-    // Construct the spot object
-    const spot: Spot = {
-      id: data.id,
-      name: data.name,
-      description: data.description,
-      type: data.type,
-      surface: data.surface,
-      difficulty: data.difficulty,
-      features,
+
+    const location: GeoLocation = { latitude, longitude };
+
+    return {
+      ...rest,
       location,
-      address: data.address,
-      images: data.images || [],
-      created_by: data.created_by,
-      created_at: data.created_at,
-      updated_at: data.updated_at,
-      status: data.status,
-      verified: data.verified || false,
-      skateability_score: data.skateability_score
-    };
-    
-    return spot;
+      created_at: new Date(data.created_at).toISOString(),
+      updated_at: new Date(data.updated_at).toISOString(),
+    } as Spot;
   }
   
   /**
@@ -558,16 +508,15 @@ export class SpotStorageService {
    */
   private async invalidateSpotCaches(): Promise<void> {
     try {
-      // Get all keys related to spots
-      const keys = await cacheManager.keys('spots:*');
-      
-      // Delete all keys
-      if (keys.length > 0) {
-        await cacheManager.del(keys);
-      }
+      await clearCachePattern('spots:*');
+      logger.info('Invalidated spot caches.');
     } catch (error) {
       logger.error('Error invalidating spot caches:', error);
     }
+  }
+
+  async getSpotsByUserId(userId: string): Promise<PaginationResult<Spot>> {
+    return this.getUserSpots(userId, {});
   }
 }
 

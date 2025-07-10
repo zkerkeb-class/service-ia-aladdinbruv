@@ -16,6 +16,9 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - REDIS_URL=redis://redis:6379
       - WEATHER_API_KEY=${WEATHER_API_KEY}
+      - ROBOFLOW_API_KEY=${ROBOFLOW_API_KEY}
+      - ROBOFLOW_MODEL_ID=${ROBOFLOW_MODEL_ID}
+      - ROBOFLOW_VERSION_NUMBER=${ROBOFLOW_VERSION_NUMBER}
     depends_on:
       - redis
     restart: unless-stopped

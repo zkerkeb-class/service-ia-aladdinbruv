@@ -7,19 +7,20 @@ import { StatusCodes } from 'http-status-codes';
 import { env } from './config/env';
 import logger from './config/logger';
 import { errorHandler, notFoundHandler } from './middleware/error.middleware';
-
-// Import routes (will create these next)
+import weatherRoutes from './routes/weather.routes';
 import spotRoutes from './routes/spot.routes';
+import homeRoutes from './routes/home.routes';
+import collectionRoutes from './routes/collection.routes';
 
 const app = express();
 
 // Apply middlewares
 app.use(helmet());
 app.use(cors({
-  origin: env.CORS_ORIGIN.split(','),
-  credentials: true,
+  origin: '*', // During development allow all origins
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  credentials: true
 }));
 app.use(compression());
 app.use(express.json({ limit: '10mb' }));
@@ -28,6 +29,9 @@ app.use(morgan('combined', { stream: { write: message => logger.info(message.tri
 
 // API routes
 app.use('/api/spots', spotRoutes);
+app.use('/api/weather', weatherRoutes);
+app.use('/api/home', homeRoutes);
+app.use('/api/collections', collectionRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -40,9 +44,9 @@ app.use(notFoundHandler);
 // Error handler
 app.use(errorHandler);
 
-const PORT = env.PORT || 3000;
+const PORT = env.PORT || 3002;
 
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   logger.info(`Server running on port ${PORT}`);
   logger.info(`Environment: ${env.NODE_ENV}`);
 });

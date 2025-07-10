@@ -196,7 +196,7 @@ export class WeatherService {
       
       // Analyze each day's hourly forecast
       forecast.forEach(day => {
-        day.hourly_forecasts.forEach(hour => {
+        day.hourly_forecasts.forEach((hour: any) => {
           // Only consider daytime hours (8am-8pm)
           const hourNum = parseInt(hour.time.split(':')[0]);
           if (hourNum >= 8 && hourNum <= 20) {
