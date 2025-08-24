@@ -2,7 +2,7 @@ name: CI (sk8spotservice)
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, chore/tests-and-ci ]
   pull_request:
     branches: [ main, master ]
 
