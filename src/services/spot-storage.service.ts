@@ -1,7 +1,11 @@
 import { v4 as uuidv4 } from 'uuid';
+import fs from 'fs';
+import path from 'path';
+import mime from 'mime-types';
 import { supabase, supabaseAdmin } from './supabase.service';
 import { getCache, setCache, deleteCache, clearCachePattern } from '../config/cache';
 import logger from '../config/logger';
+import { env } from '../config/env';
 import { 
   Spot, 
   SpotType, 
@@ -18,6 +22,7 @@ import {
  */
 export class SpotStorageService {
   private cacheTTL = 60 * 60; // 1 hour in seconds
+  private bucketName = env.STORAGE_BUCKET || 'spot-images';
 
   /**
    * Get the admin client for database operations that need to bypass RLS
@@ -512,6 +517,60 @@ export class SpotStorageService {
       logger.info('Invalidated spot caches.');
     } catch (error) {
       logger.error('Error invalidating spot caches:', error);
+    }
+  }
+
+  /**
+   * Upload a local image file to Supabase storage and link it to a spot in DB
+   */
+  async uploadSpotImageFile(
+    spotId: string,
+    localFilePath: string,
+    userId: string,
+    isPrimary: boolean = false,
+    angle: string = 'main'
+  ): Promise<{ imageUrl: string }> {
+    try {
+      const admin = this.getAdminClient();
+      const fileExt = path.extname(localFilePath) || '.jpg';
+      const contentType = mime.lookup(fileExt) || 'image/jpeg';
+      const fileKey = `spots/${spotId}/${uuidv4()}${fileExt}`;
+
+      const fileBuffer = fs.readFileSync(localFilePath);
+      const { error: uploadErr } = await admin.storage
+        .from(this.bucketName)
+        .upload(fileKey, fileBuffer, { contentType, upsert: false });
+      if (uploadErr) {
+        logger.error('Supabase storage upload error:', uploadErr);
+        throw new Error(`Storage upload failed: ${uploadErr.message}`);
+      }
+
+      const { data: pub } = admin.storage.from(this.bucketName).getPublicUrl(fileKey);
+      const publicUrl = pub.publicUrl;
+
+      const timestamp = new Date().toISOString();
+      const { error: imgErr } = await admin
+        .from('spot_images')
+        .insert({
+          id: uuidv4(),
+          spot_id: spotId,
+          user_id: userId,
+          image_url: publicUrl,
+          is_primary: isPrimary,
+          angle,
+          created_at: timestamp,
+        });
+      if (imgErr) {
+        logger.error('Error inserting spot_images row:', imgErr);
+        throw new Error(`Failed to link image: ${imgErr.message}`);
+      }
+
+      try { fs.unlinkSync(localFilePath); } catch {}
+
+      return { imageUrl: publicUrl };
+    } catch (error) {
+      logger.error('uploadSpotImageFile error:', error);
+      throw error instanceof Error ? error : new Error('Failed to upload image');
     }
   }
 

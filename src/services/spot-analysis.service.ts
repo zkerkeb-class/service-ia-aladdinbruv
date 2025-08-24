@@ -84,18 +84,11 @@ export class SpotAnalysisService {
       // --- BEGIN: ADDED NOTIFICATION LOGIC ---
       if (analysisResult) {
         try {
-          // Use dynamic import for node-fetch in a CJS module
-          const fetch = (await import('node-fetch')).default;
-
-          // Fire-and-forget the notification
-          fetch('http://localhost:3004/api/notifications/email', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              to: userEmail,
-              subject: 'Your SK8 Spot Analysis is Complete!',
-              html: `<h1>Analysis Complete</h1><p>Hey there, your spot analysis is ready. We found a <strong>${analysisResult.type}</strong> with an estimated difficulty of <strong>${analysisResult.difficulty}</strong>. Open the app to see the full details!</p>`
-            }),
+          // Fire-and-forget the notification using axios (avoids ESM issues)
+          axios.post('http://localhost:3004/api/notifications/email', {
+            to: userEmail,
+            subject: 'Your SK8 Spot Analysis is Complete!',
+            html: `<h1>Analysis Complete</h1><p>Hey there, your spot analysis is ready. We found a <strong>${analysisResult.type}</strong> with an estimated difficulty of <strong>${analysisResult.difficulty}</strong>. Open the app to see the full details!</p>`
           }).catch(err => {
             // Log the error but don't block the main flow
             console.error(`Failed to send analysis completion email to ${userEmail}:`, err);
@@ -131,20 +124,30 @@ export class SpotAnalysisService {
       const apiUrl = `https://detect.roboflow.com/${this.roboflowModelId}/${this.roboflowVersionNumber}`;
       logger.info(`Calling Roboflow API URL: ${apiUrl}`);
       
-      // Make the request to Roboflow API - using the proper format according to docs
-      const response = await axios({
-        method: 'POST',
-        url: apiUrl,
-        params: {
-          api_key: this.roboflowApiKey
-        },
-        data: {
-          image: base64Image
-        },
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
+      // Try raw base64 body first (matches working curl), then x-www-form-urlencoded fallback
+      let response;
+      try {
+        response = await axios.post(
+          apiUrl,
+          base64Image,
+          {
+            params: { api_key: this.roboflowApiKey },
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            timeout: 20000,
+          }
+        );
+      } catch (primaryErr) {
+        logger.warn('Primary Roboflow POST failed, retrying with image= form body');
+        response = await axios.post(
+          apiUrl,
+          `image=${encodeURIComponent(base64Image)}`,
+          {
+            params: { api_key: this.roboflowApiKey },
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            timeout: 20000,
+          }
+        );
+      }
       
       // Log the response for debugging
       logger.info(`Roboflow API response: ${JSON.stringify(response.data)}`);
