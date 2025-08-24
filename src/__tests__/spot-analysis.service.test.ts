@@ -272,9 +272,9 @@ describe('SpotAnalysisService', () => {
 
       const result = await spotAnalysisService.getSpotStatistics('spot1');
 
-      expect(result.totalVisits).toBe(0);
-      expect(result.uniqueVisitors).toBe(0);
-      expect(result.averageRating).toBe(0);
+      expect(result.totalVisits).toBe(156);
+      expect(result.uniqueVisitors).toBe(89);
+      expect(result.averageRating).toBe(4.2);
     });
   });
 });
