@@ -565,7 +565,7 @@ export class SpotStorageService {
         throw new Error(`Failed to link image: ${imgErr.message}`);
       }
 
-      try { fs.unlinkSync(localFilePath); } catch {}
+      try { fs.unlinkSync(localFilePath); } catch { /* ignore cleanup errors */ }
 
       return { imageUrl: publicUrl };
     } catch (error) {
