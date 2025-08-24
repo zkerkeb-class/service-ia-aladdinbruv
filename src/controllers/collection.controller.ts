@@ -32,7 +32,7 @@ class CollectionController {
       
       return res.status(StatusCodes.OK).json({
         success: true,
-        data: collectionsResult.data,
+        data: collectionsResult,
       });
     } catch (error) {
       console.error('❌ getCollections - Error:', error);

@@ -3,7 +3,7 @@ import { StatusCodes } from 'http-status-codes';
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env';
 import logger from '../config/logger';
-import { getCache, setCache } from '../config/cache';
+import { setCache } from '../config/cache';
 
 export interface AuthRequest extends Request {
   user?: {
@@ -39,8 +39,8 @@ export const authenticate = async (
     console.log('🔍 Auth middleware - Token (first 50 chars):', token.substring(0, 50) + '...');
     console.log('🔍 Auth middleware - JWT_SECRET (first 10 chars):', env.JWT_SECRET.substring(0, 10) + '...');
     
-    // Development mock token bypass
-    if (token === 'mock-development-token' && env.NODE_ENV === 'development') {
+    // Development & test mock token bypass
+    if (token === 'mock-development-token' && (env.NODE_ENV === 'development' || env.NODE_ENV === 'test')) {
       console.log('🔍 Auth middleware - Using mock development token');
       req.user = {
         userId: 'test-user-123',
