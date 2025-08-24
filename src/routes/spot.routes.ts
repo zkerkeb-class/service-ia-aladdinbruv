@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { spotController } from '../controllers/spot.controller';
 import { uploadImage } from '../middleware/upload.middleware';
 import { authenticate } from '../middleware/auth.middleware';
+import { SpotStorageService } from '../services/spot-storage.service';
+
 import { validate } from '../middleware/validation.middleware';
 import { body, query } from 'express-validator';
 
@@ -209,6 +211,24 @@ router.post(
   uploadImage, 
   spotController.analyzeSpotImage
 );
+
+// Upload spot image to Supabase and link to DB
+router.post('/spots/:spotId/images/upload', authenticate, uploadImage, async (req, res) => {
+  try {
+    const { spotId } = req.params;
+    const { userId } = (req as any).user || {};
+    const isPrimary = (req.body?.isPrimary ?? 'false').toString() === 'true';
+    const angle = req.body?.angle || 'main';
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No image file provided' });
+    }
+    const svc = new SpotStorageService();
+    const result = await svc.uploadSpotImageFile(spotId, req.file.path, userId, isPrimary, angle);
+    return res.status(200).json({ success: true, data: result });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err?.message || 'Upload failed' });
+  }
+});
 
 /**
  * @swagger

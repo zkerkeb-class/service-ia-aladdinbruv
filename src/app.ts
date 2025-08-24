@@ -44,11 +44,4 @@ app.use(notFoundHandler);
 // Error handler
 app.use(errorHandler);
 
-const PORT = env.PORT || 3002;
-
-app.listen(PORT, '0.0.0.0', () => {
-  logger.info(`Server running on port ${PORT}`);
-  logger.info(`Environment: ${env.NODE_ENV}`);
-});
-
 export default app; 

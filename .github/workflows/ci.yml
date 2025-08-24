@@ -1,0 +1,38 @@
+name: CI (sk8spotservice)
+
+on:
+  push:
+    branches: [ main, master, chore/tests-and-ci ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run lint --if-present
+      - run: npm test -- --coverage
+      - run: npm run build
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-spotservice
+          path: coverage
+  docker:
+    needs: build-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: |
+          echo "Building Docker image"
+          docker build -t sk8/spotservice:ci .
+
