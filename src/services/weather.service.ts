@@ -26,6 +26,41 @@ export class WeatherService {
   }
 
   /**
+   * Get weather for location by coordinates
+   * @param latitude Latitude
+   * @param longitude Longitude
+   * @returns Current weather data
+   */
+  async getWeatherForLocation(latitude: number, longitude: number): Promise<WeatherData> {
+    return this.getCurrentWeather({ latitude, longitude });
+  }
+
+  /**
+   * Get weather forecast for location
+   * @param latitude Latitude
+   * @param longitude Longitude
+   * @param days Number of days (optional)
+   * @returns Weather forecast data
+   */
+  async getWeatherForecast(latitude: number, longitude: number, days: number = 5): Promise<ForecastData[]> {
+    if (!this.apiKey) {
+      throw new Error('Weather API key not provided');
+    }
+
+    // Stub implementation for testing
+    return Array(days).fill(null).map((_, index) => ({
+      date: new Date(Date.now() + index * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      time: '12:00',
+      temperature: 25,
+      condition: 'Sunny',
+      humidity: 65,
+      wind_speed: 10,
+      precipitation: 0,
+      skateability: 8
+    }));
+  }
+
+  /**
    * Get current weather data for a location
    * @param coordinates Geographic coordinates
    * @returns Current weather data

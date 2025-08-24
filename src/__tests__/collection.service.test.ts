@@ -104,10 +104,10 @@ describe('CollectionService', () => {
         error: null
       });
 
-      const result = await collectionService.createCollection({
-        name: 'New Collection',
-        user_id: 'user123'
-      });
+      const result = await collectionService.createCollection(
+        'user123',
+        'New Collection'
+      );
 
       expect(result).toEqual(newCollection);
       expect(mockFrom).toHaveBeenCalledWith('collections');
@@ -124,22 +124,22 @@ describe('CollectionService', () => {
         error: { message: 'Duplicate collection name' }
       });
 
-      await expect(collectionService.createCollection({
-        name: 'Duplicate Name',
-        user_id: 'user123'
-      })).rejects.toThrow('Failed to create collection');
+      await expect(collectionService.createCollection(
+        'user123',
+        'Duplicate Name'
+      )).rejects.toThrow('Failed to create collection');
     });
 
     it('validates required fields', async () => {
-      await expect(collectionService.createCollection({
-        name: '',
-        user_id: 'user123'
-      })).rejects.toThrow('Collection name is required');
+      await expect(collectionService.createCollection(
+        'user123',
+        ''
+      )).rejects.toThrow('Collection name is required');
 
-      await expect(collectionService.createCollection({
-        name: 'Valid Name',
-        user_id: ''
-      })).rejects.toThrow('User ID is required');
+      await expect(collectionService.createCollection(
+        '',
+        'Valid Name'
+      )).rejects.toThrow('User ID is required');
     });
   });
 
@@ -157,7 +157,7 @@ describe('CollectionService', () => {
         error: null
       });
 
-      const result = await collectionService.addSpotToCollection(1, 'spot123');
+      const result = await collectionService.addSpotToCollection('1', 'spot123');
 
       expect(result).toEqual(collectionSpot);
       expect(mockFrom).toHaveBeenCalledWith('collection_spots');
@@ -173,7 +173,7 @@ describe('CollectionService', () => {
         error: { message: 'duplicate key value violates unique constraint' }
       });
 
-      await expect(collectionService.addSpotToCollection(1, 'spot123'))
+      await expect(collectionService.addSpotToCollection('1', 'spot123'))
         .rejects.toThrow('Spot already in collection');
     });
   });
@@ -185,7 +185,7 @@ describe('CollectionService', () => {
         error: null
       });
 
-      await collectionService.removeSpotFromCollection(1, 'spot123');
+      await collectionService.removeSpotFromCollection('1', 'spot123');
 
       expect(mockFrom).toHaveBeenCalledWith('collection_spots');
       expect(mockDelete).toHaveBeenCalled();
@@ -199,7 +199,7 @@ describe('CollectionService', () => {
         error: { message: 'Permission denied' }
       });
 
-      await expect(collectionService.removeSpotFromCollection(1, 'spot123'))
+      await expect(collectionService.removeSpotFromCollection('1', 'spot123'))
         .rejects.toThrow('Failed to remove spot from collection');
     });
   });
@@ -222,7 +222,7 @@ describe('CollectionService', () => {
         error: null
       });
 
-      const result = await collectionService.getCollectionSpots(1);
+      const result = await collectionService.getCollectionSpots('1');
 
       expect(result).toEqual(mockSpotsData);
       expect(mockFrom).toHaveBeenCalledWith('collection_spots');
@@ -236,7 +236,7 @@ describe('CollectionService', () => {
         error: null
       });
 
-      const result = await collectionService.getCollectionSpots(1);
+      const result = await collectionService.getCollectionSpots('1');
       expect(result).toEqual([]);
     });
   });
