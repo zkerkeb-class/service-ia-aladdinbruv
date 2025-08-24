@@ -9,12 +9,16 @@ on:
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./sk8spotservice
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: 'npm'
+          cache-dependency-path: './sk8spotservice/package-lock.json'
       - run: npm ci
       - run: npm run lint --if-present
       - run: npm test -- --coverage
@@ -23,12 +27,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-spotservice
-          path: coverage
+          path: ./sk8spotservice/coverage
   docker:
     needs: build-test
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    defaults:
+      run:
+        working-directory: ./sk8spotservice
     steps:
       - uses: actions/checkout@v4
       - name: Build Docker image
